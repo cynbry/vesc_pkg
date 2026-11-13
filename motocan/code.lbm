@@ -1,0 +1,350 @@
+; Motocompacto VESC-CAN Compatibility
+
+; --- CAN ID-Command Constants ---
+(define EVENT_LIGHT     [0x13 0x01])
+(define EVENT_MODE      [0x13 0x02])
+(define EVENT_LOCK      [0x13 0x03])
+(define EVENT_HALL      [0x13 0x08])
+(define EVENT_POWEROFF  [0x13 0xFF])
+
+(define REPLY_LIGHT     [0x31 0x01])
+(define REPLY_MODE      [0x31 0x02])
+(define REPLY_LOCK      [0x31 0x03])
+(define REPLY_SPEED     [0x31 0x06])
+(define REPLY_ODOMETER  [0x31 0x07])
+(define REPLY_READY     [0x31 0x0E])
+(define REPLY_POWEROFF  [0x31 0xFF])
+(define REPLY_BATTERY   [0x9C 0x15])
+
+
+; --- CAN Payload Constants
+(define LIGHT_OFF   0x0202)
+(define LIGHT_ON    0x0102)
+(define MODE_1        0x01)
+(define MODE_2        0x02)
+(define LOCK_OFF      0x02)
+(define LOCK_ON       0x01)
+(define HALL_OFF      0x02)
+(define HALL_ON       0x01)
+(define SPEED_MODE_1  0x0A)
+(define SPEED_MODE_2  0x0F)
+(define READY_OK      0x01)
+(define READY_NG      0x02)
+
+(define LIGHT_PARAMS     2)
+(define MODE_PARAMS      1)
+(define LOCK_PARAMS      1)
+(define SPEED_PARAMS     7)
+(define ODOMETER_PARAMS  3)
+(define READY_PARAMS     1)
+(define POWEROFF_PARAMS  7)
+(define BATTERY_PARAMS   1)
+
+
+; --- UI Request Constants
+(define COMM_UPDATE         0)
+(define COMM_DEMO         100)
+(define COMM_LIGHT_OFF      1)
+(define COMM_LIGHT_ON       2)
+(define COMM_LOCK_LOCKED    3)
+(define COMM_LOCK_UNLOCKED  4)
+(define COMM_MODE_1         5)
+(define COMM_MODE_2         6)
+
+; --- Script State ---
+(define last-vesc-speed-tx-time  0)
+(define debug-enable           nil)
+(define demo-mode                0)
+(define demo-mode-battery-down   0)
+
+; --- Motocompacto State ---
+(define app-state-lock         0)
+(define display-state-light    1)
+(define display-state-mode     1)
+(define display-state-hall     0)
+(define display-state-speed    0)
+(define display-state-battery  100)
+(define wheel-state-hall       1)
+
+; --- Overrides
+(define wheel-state-hall-override  1)
+
+
+; --- Utility Functions
+(defun structure-can-id (can-command) {
+    (bufget-u8 can-command 0)
+})
+
+(defun structure-can-payload (can-command arg-size) {
+    (var payload (bufcreate (+ arg-size 1)))
+    (bufclear payload)
+    (var command (bufget-u8 can-command 1))
+    (bufset-u8 payload 0 command)
+    payload
+})
+
+(defun debug-print (msg) {
+  (if debug-enable {
+      (print msg)
+  })
+})
+
+; --- CAN Event Handling
+(defun rx-event-light(data) {
+    (cond
+        ((= data LIGHT_ON) (setq display-state-light 1))
+        ((= data LIGHT_OFF) (setq display-state-light 0))
+    )
+    (tx-reply-light)
+})
+
+(defun rx-event-mode(data) {
+    (cond
+        ((= data MODE_1) (setq display-state-mode 1))
+        ((= data MODE_2) (setq display-state-mode 2))
+    )
+    ; Does not actually update the screen annoyingly
+    (tx-reply-mode)
+})
+
+(defun rx-event-lock(data) {
+    (cond
+        ((= data LOCK_OFF) (setq app-state-lock 0))
+        ((= data LOCK_ON) (setq app-state-lock 1))
+    )
+    (tx-reply-lock)
+})
+
+(defun rx-event-hall(data) {
+    (cond
+        ((= data HALL_ON) (setq display-state-hall 1))
+        ((= data HALL_OFF) (setq display-state-hall 0))
+    )
+    ; Does not transmit back because 0x3108 is unknown (and not needed)
+})
+
+(defun rx-event-poweroff() {
+    (tx-reply-poweroff)
+})
+
+; --- UI Event Handling
+(defun ui-comm-demo-toggle() {
+    (cond
+        ((= demo-mode 0) (setq demo-mode 1))
+        ((= demo-mode 1) {
+            (setq demo-mode 0)
+            (setq display-state-speed 0)
+            (setq display-state-battery 100)
+        })
+    )
+})
+
+(defun ui-comm-light-off() {
+    (rx-event-light LIGHT_OFF)
+})
+
+(defun ui-comm-light-on() {
+    (rx-event-light LIGHT_ON)
+})
+
+(defun ui-comm-wheellock-on() {
+    (rx-event-lock LOCK_ON)
+})
+
+(defun ui-comm-wheellock-off() {
+    (rx-event-lock LOCK_OFF)
+})
+
+(defun ui-comm-mode-1() {
+    (rx-event-mode MODE_1)
+})
+
+(defun ui-comm-mode-2() {
+    (rx-event-mode MODE_2)
+})
+
+; --- Makes available to the UI
+(defun publish-status () {
+    (send-data (str-merge
+        (str-from-n demo-mode) ":"
+        (str-from-n display-state-light) ":"
+        (str-from-n app-state-lock) ":"
+        (str-from-n display-state-mode)
+    ))
+})
+
+; --- CAN TX Methods
+(defun tx-reply-light() {
+    (var id (structure-can-id REPLY_LIGHT))
+    (var payload (structure-can-payload REPLY_LIGHT LIGHT_PARAMS))
+
+    (var data LIGHT_OFF)
+    (if (= display-state-light 1) {
+        (setq data LIGHT_ON)
+    })
+    (bufset-u16 payload 1 data)
+
+    (can-send-sid id payload)
+})
+
+(defun tx-reply-mode() {
+    (var id (structure-can-id REPLY_MODE))
+    (var payload (structure-can-payload REPLY_MODE MODE_PARAMS))
+
+    (var data 0x00)
+    (cond
+        ((= display-state-mode 1) (setq data MODE_1))
+        ((= display-state-mode 2) (setq data MODE_2))
+    )
+    (bufset-u8 payload 1 data)
+
+    (can-send-sid id payload)
+})
+
+(defun tx-reply-lock() {
+    (var id (structure-can-id REPLY_LOCK))
+    (var payload (structure-can-payload REPLY_LOCK LOCK_PARAMS))
+
+    (var data LOCK_OFF)
+    (if (= app-state-lock 1) {
+        (setq data LOCK_ON)
+    })
+    (bufset-u8 payload 1 data)
+
+    (can-send-sid id payload)
+})
+
+(defun tx-reply-speed() {
+    (var id (structure-can-id REPLY_SPEED))
+    (var payload (structure-can-payload REPLY_SPEED SPEED_PARAMS))
+
+    (bufset-u16 payload 1 (* display-state-speed 0xA0))
+    (var mode SPEED_MODE_1)
+    (if (= display-state-mode 2) (setq mode SPEED_MODE_2))
+    (bufset-u8 payload 3 mode)
+
+    (can-send-sid id payload)
+})
+
+(defun tx-reply-odometer() {
+    (var id (structure-can-id REPLY_ODOMETER))
+    (var payload (structure-can-payload REPLY_ODOMETER ODOMETER_PARAMS))
+
+    (can-send-sid id payload)
+})
+
+
+(defun tx-reply-ready() {
+    (var id (structure-can-id REPLY_READY))
+    (var payload (structure-can-payload REPLY_READY READY_PARAMS))
+
+    (var data READY_OK)
+    (if (or
+        (= display-state-hall 0)
+        (and (= wheel-state-hall 0) (= wheel-state-override 0))
+    ) (setq data READY_NG))
+    (bufset-u8 payload 1 data)
+
+    (can-send-sid id payload)
+})
+
+(defun tx-reply-poweroff() {
+    (var id (structure-can-id REPLY_POWEROFF))
+    (var payload (structure-can-payload REPLY_POWEROFF POWEROFF_PARAMS))
+
+    (can-send-sid id payload)
+})
+
+(defun tx-reply-battery() {
+    (var id (structure-can-id REPLY_BATTERY))
+    (var payload (structure-can-payload REPLY_BATTERY BATTERY_PARAMS))
+
+    (var data (* 0x64 (* display-state-battery 0.01)))
+    (bufset-u8 payload 1 data)
+
+    (can-send-sid id payload)
+})
+
+; --- Demo Mode
+(defun demo-update-speed() {
+    (setq display-state-speed (+ display-state-speed 1))
+    (if (>= display-state-speed 63) (setq display-state-speed 0))
+})
+
+(defun demo-update-battery() {
+    (cond
+        ((= demo-mode-battery-down 0) (setq display-state-battery (+ display-state-battery 10)))
+        ((= demo-mode-battery-down 1) (setq display-state-battery (- display-state-battery 10)))
+    )
+
+    (cond
+        ((> display-state-battery 100) (setq demo-mode-battery-down 1))
+        ((< display-state-battery 0) (setq demo-mode-battery-down 0))
+    )
+})
+
+; --- Main
+(defun event-thread () {
+    (loopwhile t
+        (recv
+            ((event-can-sid . ((?id) . (? data))) {
+                (var command (bufget-u8 data 0))
+                (if (= id 0x13) {
+                    (cond
+                        ((= command (bufget-u8 EVENT_LIGHT 1)) (rx-event-light (bufget-u16 data 1)))
+                        ((= command (bufget-u8 EVENT_MODE 1)) (rx-event-mode (bufget-u8 data 1)))
+                        ((= command (bufget-u8 EVENT_LOCK 1)) (rx-event-lock (bufget-u8 data 1)))
+                        ((= command (bufget-u8 EVENT_HALL 1)) (rx-event-hall (bufget-u8 data 1)))
+                        ((= command (bufget-u8 EVENT_POWEROFF 1)) (rx-event-poweroff))
+                    )
+                })
+            })
+            ((event-data-rx . (? data)) {
+                (if (>= (buflen data) 1) {
+                    (var command (bufget-u8 data 0))
+                    ;(print "got command" command)
+                    (cond
+                        ((= command COMM_UPDATE) (publish-status))
+                        ((= command COMM_LIGHT_OFF) (ui-comm-light-off))
+                        ((= command COMM_LIGHT_ON) (ui-comm-light-on))
+                        ((= command COMM_LOCK_LOCKED) (ui-comm-wheellock-on))
+                        ((= command COMM_LOCK_UNLOCKED) (ui-comm-wheellock-off))
+                        ((= command COMM_MODE_1) (ui-comm-mode-1))
+                        ((= command COMM_MODE_2) (ui-comm-mode-2))
+                        ((= command COMM_DEMO) (ui-comm-demo-toggle))
+                    )
+                    (publish-status)
+                })
+            })
+            (_ nil)
+        )
+    )
+})
+
+(defun tx-loop() {
+    (loopwhile t {
+        (sleep 0)
+
+        (if (> (secs-since last-vesc-speed-tx-time) 0.1) {
+            ;(print (get-batt))
+            ;(print (get-speed))
+
+            (tx-reply-speed)
+            (tx-reply-odometer)
+            (tx-reply-ready)
+            (tx-reply-battery)
+
+            (if (= demo-mode 1) {
+                (demo-update-speed)
+                (demo-update-battery)
+            })
+            (setq last-vesc-speed-tx-time (systime))
+        })
+    })
+})
+
+(event-register-handler (spawn event-thread))
+(event-enable 'event-can-sid)
+(event-enable 'event-data-rx)
+
+(spawn tx-loop)
