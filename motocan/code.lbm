@@ -69,7 +69,8 @@
 (define wheel-state-hall         1)
 
 ; --- Overrides
-(define wheel-state-hall-override  1)
+(define display-state-hall-override  1)
+(define wheel-state-hall-override    1)
 
 ; --- Utility Functions
 (defun structure-can-id (can-command) {
@@ -82,6 +83,10 @@
     (var command (bufget-u8 can-command 1))
     (bufset-u8 payload 0 command)
     payload
+})
+
+(defun print-can-message (can-id can-payload) {
+    (print (str-merge (str-from-n can-id "%X ") (str-from-n can-payload "%X")))
 })
 
 (defun debug-print (msg) {
@@ -239,13 +244,15 @@
     (var id (structure-can-id REPLY_READY))
     (var payload (structure-can-payload REPLY_READY READY_PARAMS))
 
+    ; Currently is always OK due to the VESC waking up after display emits initial hall state
     (var data READY_OK)
     (if (or
-        (= display-state-hall 0)
+        (and (= display-state-hall 0) (= display-state-hall-override 0))
         (and (= wheel-state-hall 0) (= wheel-state-override 0))
     ) (setq data READY_NG))
     (bufset-u8 payload 1 data)
 
+    (print-can-message id payload)
     (can-send-sid id payload)
 })
 
@@ -267,7 +274,6 @@
 })
 
 ; --- Interactions with the VESC
-
 (defun vesc-read-battery() {
     (setq display-state-battery (* (get-batt) 100))
 })
@@ -329,7 +335,6 @@
             ((event-data-rx . (? data)) {
                 (if (>= (buflen data) 1) {
                     (var command (bufget-u8 data 0))
-                    ;(print "got command" command)
                     (cond
                         ((= command COMM_UPDATE) (publish-status))
                         ((= command COMM_LIGHT_OFF) (ui-comm-light-off))
@@ -350,7 +355,7 @@
 
 (defun tx-loop() {
     (loopwhile t {
-        (sleep 0)
+        (sleep 0.1)
 
         (if (> (secs-since last-vesc-speed-tx-time) 0.2) {
             (tx-reply-speed)

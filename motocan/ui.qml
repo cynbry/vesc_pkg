@@ -9,7 +9,7 @@ Item {
 	id: container;
 	anchors.fill: parent;
 
-	property string title: "MotoCAN"
+	property string tabTitle: "MotoCAN"
 
 	property Commands mCommands: VescIf.commands()
 
@@ -118,18 +118,6 @@ Item {
 		anchors.margins: 10
 		height: 60
 
-		RowLayout {
-			anchors.centerIn: parent
-			spacing: 15
-
-			Text {
-				font.pointSize: 22
-				font.bold: true
-				color: Utility.getAppHexColor("normalText")
-				text: "MotoCAN"
-			}
-		}
-
 		ScrollView {
 			id: scrollView
 			anchors.top: header.bottom
@@ -151,12 +139,33 @@ Item {
 
 				GridLayout {
 					columns: 2
-					rowSpacing: 0
+					rowSpacing: 10
 					columnSpacing: 20
 
 					Text {
 						Layout.columnSpan: 2
-						text: "Text"
+						text: "Lights"
+					}
+
+					Button {
+						Layout.fillWidth: true
+						text: "Off"
+					}
+
+					Button {
+						Layout.fillWidth: true
+						text: "On"
+					}
+				}
+
+				GridLayout {
+					columns: 2
+					rowSpacing: 10
+					columnSpacing: 20
+
+					Text {
+						Layout.columnSpan: 2
+						text: "Lights"
 					}
 
 					Button {
